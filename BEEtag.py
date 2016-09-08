@@ -8,10 +8,14 @@
 # from PIL import Image
 # import beeTag as bt
 
+import matplotlib
+matplotlib.use('qt4agg')
+
+import matplotlib.pyplot as plt
+
 import cv2  # written for opencv3
 import numpy as np
 
-import matplotlib.pyplot as plt
 
 from skimage.color import rgb2gray
 from skimage.filters import threshold_otsu, threshold_adaptive
@@ -276,6 +280,8 @@ class BEEtag:
         self.undistorted_im = undistorted_im
         self.undistorted_bw_im = undistorted_bw_im
 
+    def 
+
     def get_codes(self):
 
         code_locations = np.array([5.5/7, 4.5/7, 3.5/7, 2.5/7, 1.5/7])*self.sc
@@ -294,9 +300,6 @@ class BEEtag:
             codes.append(tmp_code)
 
         self.id_codes = codes
-
-
-
 
 
     def draw_possible_regions(self):
@@ -322,4 +325,65 @@ class BEEtag:
     def im_from_bbox(self, im_in, bbox):
 
         return im_in[bbox[0]:bbox[2], bbox[1]:bbox[3]]
+
+
+
+
+if __name__ == '__main__':
+
+    import BEEtag as BT
+
+    import numpy as np
+    from PIL import Image
+
+
+
+
+    print('testing now')
+
+    im = np.array(Image.open('./data/scaleExample.png'))
+
+    a = BT.BEEtag(visualize=0)
+    print(a)
+
+    a.set_image(im)
+    a.find_valid_regions()
+    a.find_square_regions()
+
+    a.transform_to_grid()
+
+    a.undistort_squares()
+
+#    a.get_codes()
+
+
+#
+    # drawing stuff
+    plt.figure(1)
+    plt.imshow(a.im)
+
+    plt.figure(2)
+    plt.imshow(a.im_gray)
+
+    plt.figure(3)
+    plt.imshow(a.BW_Label)
+
+    plt.figure(4)
+    for kk, (reg, x, y) in enumerate(zip(a.regions, a.contour_x_points, a.contour_y_points)):
+        plt.subplot(len(a.regions) / 2 + 1, 2, kk+1)
+        plt.imshow(reg.filled_image, interpolation='nearest')
+        plt.title(len(x))
+        plt.plot(x, y, 'o-')
+
+    a.draw_possible_regions()
+
+    a.draw_quad_regions()
+
+
+    plt.draw()
+    plt.show(block=False)
+
+
+
+
 
