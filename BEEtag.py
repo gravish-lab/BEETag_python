@@ -13,7 +13,7 @@ matplotlib.use('qt4agg')
 
 import matplotlib.pyplot as plt
 
-import cv2  # written for opencv3
+import cv2 as cv # written for opencv3
 import numpy as np
 
 
@@ -98,15 +98,18 @@ class BEEtag:
 
 
     def __init__(self, col_mode = 1, threshold = None, visualize = True,
-                 region_size = (50, 1000), robust_track = False, tag_list = [],
-                 localized_thresh_mode = False, localized_threshold_params= (15, 0)):
+                 region_size = (500, 3000), robust_track = False, tag_list = [],
+                 localized_threshold_params = (21, 0),
+                 length_epsilon = 10,
+                 parallel_epsilon = 15,
+                 contour_epsilon = 0.1):
         '''
         Default initialization
         '''
 
         self.col_mode = col_mode  # color images
         self.visualize = visualize
-        self.localized_thresh_mode = localized_thresh_mode
+        self.localized_thresh_mode = (threshold == None)
         self.robust_track = robust_track
         self.tag_list = tag_list
         self.localized_thresh_blocksize = localized_threshold_params[0]
@@ -119,6 +122,9 @@ class BEEtag:
         self.regions = None
 
         self.sc = 100 # for unwarping
+        self.length_epsilon = length_epsilon
+        self.parallel_epsilon = parallel_epsilon
+        self.contour_epsilon = contour_epsilon
 
         # for plotting
         self.plots_corner_size = 10
@@ -129,8 +135,6 @@ class BEEtag:
         else:
             self.auto_threshold = False
             self.threshold = threshold
-
-
 
     def __str__(self):
         '''
@@ -152,8 +156,7 @@ class BEEtag:
 
     def set_image(self, im):
         self.im = im
-        self.im_gray = rgb2gray(self.im)
-        self.threshold_image()
+        self.im_gray = cv.cvtColor(self.im, cv.COLOR_RGB2GRAY)
 
     def threshold_image(self):
         '''
@@ -162,25 +165,33 @@ class BEEtag:
         '''
 
         # check for global or local thresholding
-        if self.localized_thresh_mode == True:
-            self.im_bw = threshold_adaptive(self.im_gray,
-                                            block_size = self.localized_thresh_blocksize,
-                                            offset = self.localized_thresh_offset)
+        if self.localized_thresh_mode:
+            self.im_bw = cv.adaptiveThreshold(self.im_gray,
+                                              1,
+                                              cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                              cv.THRESH_BINARY,
+                                              self.localized_thresh_blocksize,
+                                              self.localized_thresh_offset)
+
         else:
-            self.threshold = threshold_otsu(self.im_gray)
-            self.im_bw = self.im_gray > self.threshold
+            # Otsu's method
+            self.im_bw  = cv.threshold(self.im_gray,
+                                          0,
+                                          1,
+                                          cv2.THRESH_BINARY+cv2.THRESH_OTSU)
 
     def find_valid_regions(self):
         '''
         Segment the black and white image into connected components.
          Ignore component regions beyond specifications
         '''
+        #TODO Need to convert to opencv based processing
 
         self.BW_Label = label(self.im_bw, neighbors=8, background=0)
         regions_tmp = regionprops(self.BW_Label)
 
-        self.regions = [reg for reg in regions_tmp if reg['Area'] > self.region_size[0] and
-                                                      reg['Area'] < self.region_size[1]]
+        # chained comparisons!!!!!
+        self.regions = [reg for reg in regions_tmp if self.region_size[0] < reg['Area'] < self.region_size[1]]
 
     def find_square_regions(self):
         '''
@@ -189,41 +200,75 @@ class BEEtag:
 
         '''
 
-        contour_x_points = [] # mainly for debugging
-        contour_y_points = []
+        def unit_vector(vector):
+            """
+            Returns the unit vector of the vector.
+            """
+            return vector / np.linalg.norm(vector)
 
-        square_x_points = []
-        square_y_points = []
+        def angle_between(v1, v2):
+            """
+            Returns the angle in radians between vectors 'v1' and 'v2'::
+            """
+            v1_u = unit_vector(v1)
+            v2_u = unit_vector(v2)
+            return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
 
-        square_regions = []
+        self.contour_x_points = [] # mainly for debugging
+        self.contour_y_points = []
+
+        self.square_x_points = []
+        self.square_y_points = []
+
+        self.square_regions = []
+
+        self.number_squares = 0
 
         for reg in self.regions:
 
             # pull out the contours
-            imout, contours, hierarchy = cv2.findContours(np.array(reg.filled_image, dtype='uint8'),
-                                           cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+            imout, contours, hierarchy = cv.findContours(np.uint8(reg.filled_image),
+                                           cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE)
 
             # Best approximation of a polygon for the shape (not sure about 0 here need to chck TODO)
-            tmp = cv2.approxPolyDP(contours[0], 0.01 * cv2.arcLength(contours[0], True), True)
+            tmp = cv.approxPolyDP(contours[0], self.contour_epsilon * cv.arcLength(contours[0], True), True)
 
-            contour_x_points.append([pt[0][0] for pt in tmp])  # convert out of opencv's annoying nested list
-            contour_y_points.append([pt[0][1] for pt in tmp])
+            x = [pt[0][0] for pt in tmp]
+            y = [pt[0][1] for pt in tmp]
+
+            self.contour_x_points.append(x)  # convert out of opencv's annoying nested list
+            self.contour_y_points.append(y)
+
+            # 4 points in a square
+            if len(x) != 4:
+                continue
 
             # check if square
-            if len(tmp) == 4:
-                square_x_points.append([pt[0][0] for pt in tmp])  # convert out of opencv's annoying nested list
-                square_y_points.append([pt[0][1] for pt in tmp])
+            # if square these points will be parallel, and all the same length approximately
+            # for x, y in zip(self.contour_x_points[-1], self.contour_y_points[-1]):
 
-                square_regions.append(reg)
+            # first check lengths
+            lengths = [np.sqrt((x[k % 4] - x[(k + 1) % 4]) ** 2 + (y[k % 4] - y[(k + 1) % 4]) ** 2) for k in np.arange(1, 5)]
+            error = lengths - np.mean(lengths)
 
-        self.contour_x_points = contour_x_points
-        self.contour_y_points = contour_y_points
+            OK_lengths = all([err < self.length_epsilon for err in error])
 
-        self.square_x_points = square_x_points
-        self.square_y_points = square_y_points
+            # next check paralelism
+            dots = [angle_between(np.array([x[k + 1], y[k + 1]]) - np.array([x[k], y[k]]),
+                                  np.array([x[(k + 2) % 4], y[(k + 2) % 4]]) -
+                                  np.array([x[(k + 2 + 1) % 4], y[(k + 2 + 1) % 4]])) for k in range(2)]
 
-        self.square_regions = square_regions
 
+            OK_parallel = all([dot < self.parallel_epsilon for dot in dots])
+
+            if OK_lengths and OK_parallel:
+
+                self.square_x_points.append(x)  # convert out of opencv's annoying nested list
+                self.square_y_points.append(y)
+
+                self.square_regions.append(reg)
+
+                self.number_squares += 1
 
     def transform_to_grid(self):
         '''
@@ -233,74 +278,155 @@ class BEEtag:
         '''
 
         dest_grid = np.float32([[0, 0], [0, 1], [1, 1], [1, 0]])*self.sc
-        M = []
-        for sq_x, sq_y in zip(self.square_x_points, self.square_y_points):
+
+        self.undistorted_im = []
+        self.undistorted_bw_im = []
+        self.transformation_matrix = []
+
+        for sq_x, sq_y, reg in zip(self.square_x_points, self.square_y_points, self.square_regions):
 
             source_grid = np.float32([[x, y] for x,y in zip(sq_x, sq_y)])
-            M.append(cv2.getPerspectiveTransform(source_grid, dest_grid))
-
-        self.transformation_matrix = M
-
-    def undistort_squares(self):
-
-        undistorted_im = []
-        undistorted_bw_im = []
-
-        for M, x, y, reg in zip(self.transformation_matrix,
-                                self.square_x_points,
-                                self.square_y_points,
-                                self.square_regions):
+            M = cv.getPerspectiveTransform(source_grid, dest_grid)
+            self.transformation_matrix.append(M)
 
             imm = self.im_from_bbox(self.im, reg.bbox)
             imm_bw = self.im_from_bbox(self.im_bw, reg.bbox)
 
-            imm_transformed = cv2.warpPerspective(np.array(imm, dtype='uint8'), M, (self.sc, self.sc))
-            imm_transformed_bw = cv2.warpPerspective(np.array(imm_bw, dtype='uint8'), M, (self.sc, self.sc))
+            imm_transformed = cv.warpPerspective(np.array(imm, dtype='uint8'), M, (self.sc, self.sc))
+            imm_transformed_bw = cv.warpPerspective(np.array(imm_bw, dtype='uint8'), M, (self.sc, self.sc))
 
-            undistorted_im.append(imm_transformed)
-            undistorted_bw_im.append(imm_transformed_bw)
-
-            if self.visualize:
-                plt.clf()
-                plt.subplot(2,2,1)
-                plt.imshow(imm, interpolation='nearest')
-
-                plt.subplot(2,2,2)
-                plt.imshow(imm_transformed, interpolation='nearest')
-
-                plt.subplot(2,2,3)
-                plt.imshow(imm_bw, interpolation='nearest')
-
-                plt.subplot(2, 2, 4)
-                plt.imshow(imm_transformed_bw, interpolation='nearest')
-
-                plt.draw()
-                plt.show()
-
-        self.undistorted_im = undistorted_im
-        self.undistorted_bw_im = undistorted_bw_im
-
-    def 
+            self.undistorted_im.append(imm_transformed)
+            self.undistorted_bw_im.append(imm_transformed_bw)
 
     def get_codes(self):
 
-        code_locations = np.array([5.5/7, 4.5/7, 3.5/7, 2.5/7, 1.5/7])*self.sc
-        x_coord, y_coord = np.meshgrid(code_locations, code_locations)
+        def checkOrs25(imc):
+            """
+            Checks for valid 5x5 code pattern in each of the 4 possible configurations
+            Returns a code and the orientation
+            """
+            check = []
+
+            # checks all 4 possible orientations of the tag.
+            # checks the checksum column and stores the value of whether valid tag or not in in check list
+            for cc in range(4):
+                imcr = np.rot90(imc, cc)
+                check.append(checkCodes25(imcr))  # TODO must return bool
+
+            check = np.array(check)
+
+            # there can only be one valid orientation of a correct tag, so there should only be 1 entry that is
+            # non zero in the check array. If the sum is 0 or greater than 1 we know it is invalid
+
+            codesFinal = None
+            orienation = None
+
+            if sum(check) == 1:
+                orienation = np.where(check)[0]
+                codesFinal = np.rot90(imc, orienation)
+
+            return codesFinal, orienation
+
+        def checkCodes25(imc):
+            """
+            Checks that code is valid by checking error bits in last 2 columns of 5x5 pattern. Error bits are as follows
+
+            column 4: row bits 1-3 are parity of columns 1-3, row bit 4 is parity of top 3 rows in 3 columns of code.
+            (parity of upper left 3x3 code matrix). row bit 5 is parity of bottom 2 rows of 3 columns (bottom left
+            2x3 code matrix).
+
+            column 5: reverse of column 4.
+
+            column 5 must equal reverse of column 4 for pass
+            """
+
+            im = imc[:, 0:3]
+            check_column1 = imc[:, 3].tolist()
+            check_column2 = imc[:, 4].tolist()
+            check_column2.reverse()
+
+            for first_three_bits in range(3):
+                if (np.sum(im[:, first_three_bits]) % 2) != check_column1[first_three_bits]:
+                    return False
+
+            if (np.sum(im[:3, :]) % 2) != check_column1[3]:
+                return False
+
+            if (np.sum(im[3:, :]) % 2) != check_column1[4]:
+                return False
+
+            if any([c1 != c2 for c1, c2 in zip(check_column1, check_column2)]):
+                return False
+
+            # if we got thorough all the checks, return true
+            return True
+
+        code_locations = np.array([1.5 / 7, 2.5 / 7, 3.5 / 7, 4.5 / 7, 5.5 / 7]) * self.sc
+        y_coord, x_coord = np.meshgrid(code_locations, code_locations)
         x_coord = np.reshape(x_coord, 25)
         y_coord = np.reshape(y_coord, 25)
 
-        codes = []
+        averaging_width = round((self.sc / 7) / 4)
+
+        self.codes = []
+        self.tag_id = []
+
         for code_im in self.undistorted_bw_im:
             tmp_code = []
 
+            # pull out the binary code values
             for x,y in zip(x_coord, y_coord):
 
-                tmp_code.append(code_im[round(x),round(y)] == True)
+                xrange = np.int32(round(x) + np.array([-averaging_width, averaging_width]))
+                yrange = np.int32(round(y) + np.array([-averaging_width, averaging_width]))
 
-            codes.append(tmp_code)
+                tmp_code.append(np.mean(code_im[yrange[0]:yrange[1], xrange[0]:xrange[1]]) > .5)
 
-        self.id_codes = codes
+                if self.visualize == True:
+                    plt.clf()
+                    a.draw_undistorted(color=False)
+                    plt.plot(x, y, 'ow')
+                    plt.draw()
+                    plt.gca().invert_yaxis()
+                    plt.title('This point is ', tmp_code[-1], ' press any button to continue')
+                    plt.waitforbuttonpress()
 
+            # convert back to 5x5 array
+            tmp_code = np.reshape(tmp_code, (5,5)).T
+            # do the heavy lifting to check the code
+            final_code, valid_code = checkOrs25(tmp_code)
+
+            if valid_code is not None:
+                self.codes.append(final_code)
+                self.tag_id.append(self.code_to_id(final_code))
+            else:
+                self.tag_id.append([])
+                self.codes.append([])
+
+    def code_to_id(self, code):
+        """
+        reshape so that is a 1D array columns first
+        """
+        code = np.uint8(np.ravel(code.T))
+        return int(str().join(str(x) for x in code[0:15]), 2)
+
+    def draw_undistorted(self, color = True):
+
+        plot_w_dimension = np.ceil(np.sqrt(self.number_squares))
+        plot_h_dimension = np.ceil(self.number_squares / plot_w_dimension)
+
+        if color:
+            ims = self.undistorted_im
+        else:
+            ims = self.undistorted_bw_im
+
+        for kk, (reg, x, y) in enumerate(zip(ims, self.square_x_points, self.square_y_points)):
+            plt.subplot(plot_h_dimension, plot_w_dimension, kk + 1)
+            plt.imshow(reg, interpolation='nearest')
+            [plt.plot([(self.sc/7) * (k+1), (self.sc/7) * (k + 1)], [0, self.sc], 'r') for k in range(7)]
+            [plt.plot([0, self.sc],[(self.sc / 7) * (k + 1), (self.sc / 7) * (k + 1)], 'r') for k in range(7)]
+            plt.axis([0, self.sc, 0, self.sc])
+            plt.gca().invert_yaxis()
 
     def draw_possible_regions(self):
 
@@ -313,9 +439,9 @@ class BEEtag:
             plt.plot(x, y, 'o-')
             plt.show(block = False)
 
+
     def draw_quad_regions(self):
 
-        plt.figure()
         plt.imshow(self.im, interpolation='nearest')
 
         for x,y,reg in zip(self.square_x_points, self.square_y_points, self.square_regions):
