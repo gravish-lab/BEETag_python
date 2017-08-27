@@ -1,7 +1,7 @@
 
 
 import matplotlib
-matplotlib.use('qt4agg')
+matplotlib.use('qt5agg')
 
 
 import BEEtag as BT
@@ -21,6 +21,8 @@ if __name__ == '__main__':
     print(a)
 
     a.set_image(im)
+    a.threshold_image()
+
     a.find_valid_regions()
     a.find_square_regions()
 

@@ -9,7 +9,7 @@
 # import beeTag as bt
 
 import matplotlib
-matplotlib.use('qt4agg')
+matplotlib.use('qt5agg')
 
 import matplotlib.pyplot as plt
 
@@ -21,6 +21,9 @@ from skimage.color import rgb2gray
 from skimage.filters import threshold_otsu, threshold_adaptive
 from skimage.measure import regionprops, label
 
+#TODO Not implemented yet:
+#TODO 1) Robust track
+#TODO 2)
 
 class BEEtag:
     '''
@@ -99,8 +102,8 @@ class BEEtag:
 
     def __init__(self, col_mode = 1, threshold = None, visualize = True,
                  region_size = (500, 3000), robust_track = False, tag_list = [],
-                 localized_threshold_params = (21, 0),
-                 length_epsilon = 10,
+                 localized_threshold_params = (41, 0),
+                 length_epsilon = 0.2,
                  parallel_epsilon = 15,
                  contour_epsilon = 0.1):
         '''
@@ -178,7 +181,9 @@ class BEEtag:
             self.im_bw  = cv.threshold(self.im_gray,
                                           0,
                                           1,
-                                          cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+                                          cv.THRESH_BINARY+cv.THRESH_OTSU)
+
+        self.BW_Label = label(self.im_bw, neighbors=8, background=0)
 
     def find_valid_regions(self):
         '''
@@ -186,8 +191,6 @@ class BEEtag:
          Ignore component regions beyond specifications
         '''
         #TODO Need to convert to opencv based processing
-
-        self.BW_Label = label(self.im_bw, neighbors=8, background=0)
         regions_tmp = regionprops(self.BW_Label)
 
         # chained comparisons!!!!!
@@ -249,7 +252,7 @@ class BEEtag:
 
             # first check lengths
             lengths = [np.sqrt((x[k % 4] - x[(k + 1) % 4]) ** 2 + (y[k % 4] - y[(k + 1) % 4]) ** 2) for k in np.arange(1, 5)]
-            error = lengths - np.mean(lengths)
+            error = np.abs(1-lengths/np.mean(lengths))
 
             OK_lengths = all([err < self.length_epsilon for err in error])
 
@@ -384,11 +387,11 @@ class BEEtag:
 
                 if self.visualize == True:
                     plt.clf()
-                    a.draw_undistorted(color=False)
+                    self.draw_undistorted(color=False)
                     plt.plot(x, y, 'ow')
                     plt.draw()
                     plt.gca().invert_yaxis()
-                    plt.title('This point is ', tmp_code[-1], ' press any button to continue')
+                    plt.title('This point is ' +  str(tmp_code[-1]) + ' press any button to continue')
                     plt.waitforbuttonpress()
 
             # convert back to 5x5 array
@@ -439,14 +442,32 @@ class BEEtag:
             plt.plot(x, y, 'o-')
             plt.show(block = False)
 
+    def draw_code_regions(self):
+
+        plt.imshow(self.im, interpolation='nearest')
+
+        for x,y,reg, tag_id_curr in zip(self.square_x_points, self.square_y_points,
+                           self.square_regions, self.tag_id):
+            if tag_id_curr != []:
+                plt.plot(np.array(x) + reg.bbox[1], np.array(y) + reg.bbox[0],'o-')
+                plt.gca().annotate(str(tag_id_curr), xy=(reg.bbox[1] + 10, reg.bbox[0] + 10),
+                                   fontsize = 14, color = 'w')
+
 
     def draw_quad_regions(self):
 
         plt.imshow(self.im, interpolation='nearest')
 
-        for x,y,reg in zip(self.square_x_points, self.square_y_points, self.square_regions):
-            plt.plot(np.array(x) + reg.bbox[1], np.array(y) + reg.bbox[0],'o-')
+        if len(self.tag_id) == len(self.square_y_points):
+            for x, y, reg, tag_id_curr in zip(self.square_x_points, self.square_y_points,
+                                              self.square_regions, self.tag_id):
+                plt.plot(np.array(x) + reg.bbox[1], np.array(y) + reg.bbox[0], 'o-')
+                plt.gca().annotate(str(tag_id_curr), xy=(reg.bbox[1] + 10, reg.bbox[0] + 10),
+                                   fontsize=14, fontcolor='w')
 
+        else:
+            for x, y, reg in zip(self.square_x_points, self.square_y_points, self.square_regions):
+                plt.plot(np.array(x) + reg.bbox[1], np.array(y) + reg.bbox[0], 'o-')
 
     def im_from_bbox(self, im_in, bbox):
 
@@ -473,12 +494,12 @@ if __name__ == '__main__':
     print(a)
 
     a.set_image(im)
+    a.threshold_image()
     a.find_valid_regions()
     a.find_square_regions()
 
     a.transform_to_grid()
 
-    a.undistort_squares()
 
 #    a.get_codes()
 
