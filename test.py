@@ -1,7 +1,7 @@
 
 
 import matplotlib
-matplotlib.use('qt4agg')
+matplotlib.use('qt5agg')
 
 
 import BEEtag as BT
@@ -32,31 +32,33 @@ if __name__ == '__main__':
 
 
 #
-    # # drawing stuff
-    # plt.figure(1)
-    # plt.imshow(a.im)
-    #
-    # plt.figure(2)
-    # plt.imshow(a.im_gray)
-    #
-    # plt.figure(3)
-    # plt.imshow(a.BW_Label)
+    # drawing stuff
+    plt.figure(1)
+    plt.imshow(a.im)
 
-    # plt.figure(4)
-    # for kk, (reg, x, y) in enumerate(zip(a.regions, a.contour_x_points, a.contour_y_points)):
-    #     plt.subplot(len(a.regions) / 2 + 1, 2, kk+1)
-    #     plt.imshow(reg.filled_image, interpolation='nearest')
-    #     plt.title(len(x))
-    #     plt.plot(x, y, 'o-')
+    plt.figure(2)
+    plt.imshow(a.im_gray)
 
-    # a.draw_possible_regions()
+    plt.figure(3)
+    plt.imshow(a.BW_Label)
 
-    # a.draw_quad_regions()
+    plt.figure(4)
+    for kk, (reg, x, y) in enumerate(zip(a.regions, a.contour_x_points, a.contour_y_points)):
+        plt.subplot(len(a.regions) / 2 + 1, 2, kk+1)
+        plt.imshow(reg.filled_image, interpolation='nearest')
+        plt.title(len(x))
+        plt.plot(x, y, 'o-')
+
+    a.draw_possible_regions()
+
+    a.draw_quad_regions()
 
 
     plt.draw()
+
     plt.show(block=False)
 
+    plt.ginput()
 
 
 
